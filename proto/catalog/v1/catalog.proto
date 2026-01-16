@@ -1,0 +1,163 @@
+syntax = "proto3";
+
+package catalog.v1;
+
+option go_package = "github.com/opentdf/connectrpc-catalog/gen/catalog/v1;catalogv1";
+
+// CatalogService provides dynamic gRPC service discovery and invocation
+service CatalogService {
+  // LoadProtos loads proto definitions from various sources
+  rpc LoadProtos(LoadProtosRequest) returns (LoadProtosResponse);
+
+  // ListServices returns all discovered services and their methods
+  rpc ListServices(ListServicesRequest) returns (ListServicesResponse);
+
+  // GetServiceSchema returns the full message schema for a service
+  rpc GetServiceSchema(GetServiceSchemaRequest) returns (GetServiceSchemaResponse);
+
+  // InvokeGRPC dynamically invokes a gRPC method (proxy through backend)
+  rpc InvokeGRPC(InvokeGRPCRequest) returns (InvokeGRPCResponse);
+}
+
+// LoadProtosRequest specifies the source of proto definitions
+message LoadProtosRequest {
+  // Source of proto definitions (oneof)
+  oneof source {
+    // Local filesystem path
+    string proto_path = 1;
+
+    // GitHub repository (e.g., "github.com/connectrpc/eliza")
+    string proto_repo = 2;
+
+    // Buf registry module (e.g., "buf.build/connectrpc/eliza")
+    string buf_module = 3;
+  }
+}
+
+// LoadProtosResponse returns the result of loading protos
+message LoadProtosResponse {
+  // Success indicator
+  bool success = 1;
+
+  // Error message if loading failed
+  string error = 2;
+
+  // Number of services loaded
+  int32 service_count = 3;
+
+  // Number of proto files processed
+  int32 file_count = 4;
+}
+
+// ListServicesRequest has no parameters (returns all services)
+message ListServicesRequest {}
+
+// ListServicesResponse returns all discovered services
+message ListServicesResponse {
+  // List of services with their methods
+  repeated ServiceInfo services = 1;
+}
+
+// ServiceInfo describes a gRPC service
+message ServiceInfo {
+  // Fully qualified service name (e.g., "catalog.v1.CatalogService")
+  string name = 1;
+
+  // Package name (e.g., "catalog.v1")
+  string package = 2;
+
+  // List of methods in this service
+  repeated MethodInfo methods = 3;
+
+  // Service documentation (if available)
+  string documentation = 4;
+}
+
+// MethodInfo describes a gRPC method
+message MethodInfo {
+  // Method name (e.g., "LoadProtos")
+  string name = 1;
+
+  // Fully qualified input message type
+  string input_type = 2;
+
+  // Fully qualified output message type
+  string output_type = 3;
+
+  // Method documentation (if available)
+  string documentation = 4;
+
+  // Whether the method is client streaming
+  bool client_streaming = 5;
+
+  // Whether the method is server streaming
+  bool server_streaming = 6;
+}
+
+// GetServiceSchemaRequest specifies which service schema to retrieve
+message GetServiceSchemaRequest {
+  // Fully qualified service name
+  string service_name = 1;
+}
+
+// GetServiceSchemaResponse returns the schema for a service
+message GetServiceSchemaResponse {
+  // Service information
+  ServiceInfo service = 1;
+
+  // Message schemas referenced by this service (JSON Schema format)
+  // Key: fully qualified message name
+  // Value: JSON Schema representation
+  map<string, string> message_schemas = 2;
+
+  // Error message if schema retrieval failed
+  string error = 3;
+}
+
+// InvokeGRPCRequest specifies the gRPC call to make
+message InvokeGRPCRequest {
+  // Target gRPC endpoint (e.g., "localhost:8080")
+  string endpoint = 1;
+
+  // Fully qualified service name
+  string service = 2;
+
+  // Method name
+  string method = 3;
+
+  // Request payload as JSON
+  string request_json = 4;
+
+  // Optional: use TLS for connection
+  bool use_tls = 5;
+
+  // Optional: server name override for TLS
+  string server_name = 6;
+
+  // Optional: timeout in seconds
+  int32 timeout_seconds = 7;
+
+  // Optional: metadata headers
+  map<string, string> metadata = 8;
+}
+
+// InvokeGRPCResponse returns the result of a gRPC call
+message InvokeGRPCResponse {
+  // Success indicator
+  bool success = 1;
+
+  // Response payload as JSON (if successful)
+  string response_json = 2;
+
+  // Error message (if failed)
+  string error = 3;
+
+  // Response metadata/trailers
+  map<string, string> metadata = 4;
+
+  // Response status code
+  int32 status_code = 5;
+
+  // Status message
+  string status_message = 6;
+}
