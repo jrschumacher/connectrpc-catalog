@@ -7,6 +7,40 @@ import type { BinaryReadOptions, FieldList, JsonReadOptions, JsonValue, PartialM
 import { Message, proto3 } from "@bufbuild/protobuf";
 
 /**
+ * Transport specifies the protocol to use for invocation
+ *
+ * @generated from enum catalog.v1.Transport
+ */
+export enum Transport {
+  /**
+   * Default: HTTP with Connect protocol (JSON over HTTP)
+   *
+   * @generated from enum value: TRANSPORT_CONNECT = 0;
+   */
+  CONNECT = 0,
+
+  /**
+   * gRPC protocol (HTTP/2 with binary protobuf)
+   *
+   * @generated from enum value: TRANSPORT_GRPC = 1;
+   */
+  GRPC = 1,
+
+  /**
+   * gRPC-Web protocol (for browser compatibility)
+   *
+   * @generated from enum value: TRANSPORT_GRPC_WEB = 2;
+   */
+  GRPC_WEB = 2,
+}
+// Retrieve enum metadata with: proto3.getEnumType(Transport)
+proto3.util.setEnumType(Transport, "catalog.v1.Transport", [
+  { no: 0, name: "TRANSPORT_CONNECT" },
+  { no: 1, name: "TRANSPORT_GRPC" },
+  { no: 2, name: "TRANSPORT_GRPC_WEB" },
+]);
+
+/**
  * LoadProtosRequest specifies the source of proto definitions
  *
  * @generated from message catalog.v1.LoadProtosRequest
@@ -520,6 +554,13 @@ export class InvokeGRPCRequest extends Message<InvokeGRPCRequest> {
    */
   metadata: { [key: string]: string } = {};
 
+  /**
+   * Optional: transport protocol (default: TRANSPORT_CONNECT)
+   *
+   * @generated from field: catalog.v1.Transport transport = 9;
+   */
+  transport = Transport.CONNECT;
+
   constructor(data?: PartialMessage<InvokeGRPCRequest>) {
     super();
     proto3.util.initPartial(data, this);
@@ -536,6 +577,7 @@ export class InvokeGRPCRequest extends Message<InvokeGRPCRequest> {
     { no: 6, name: "server_name", kind: "scalar", T: 9 /* ScalarType.STRING */ },
     { no: 7, name: "timeout_seconds", kind: "scalar", T: 5 /* ScalarType.INT32 */ },
     { no: 8, name: "metadata", kind: "map", K: 9 /* ScalarType.STRING */, V: {kind: "scalar", T: 9 /* ScalarType.STRING */} },
+    { no: 9, name: "transport", kind: "enum", T: proto3.getEnumType(Transport) },
   ]);
 
   static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): InvokeGRPCRequest {

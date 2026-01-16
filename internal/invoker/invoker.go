@@ -1,11 +1,16 @@
 package invoker
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"time"
+
+	catalogv1 "github.com/opentdf/connectrpc-catalog/gen/catalog/v1"
 
 	"github.com/golang/protobuf/jsonpb"
 	"github.com/jhump/protoreflect/desc"
@@ -21,12 +26,17 @@ import (
 type Invoker struct {
 	// Connection pool for reusing gRPC connections
 	connections map[string]*grpc.ClientConn
+	// HTTP client for Connect protocol
+	httpClient *http.Client
 }
 
 // New creates a new Invoker instance
 func New() *Invoker {
 	return &Invoker{
 		connections: make(map[string]*grpc.ClientConn),
+		httpClient: &http.Client{
+			Timeout: 30 * time.Second,
+		},
 	}
 }
 
@@ -41,6 +51,7 @@ type InvokeRequest struct {
 	TimeoutSeconds  int32
 	Metadata        map[string]string
 	MethodDesc      *desc.MethodDescriptor
+	Transport       catalogv1.Transport // Transport protocol to use
 }
 
 // InvokeResponse contains the result of a gRPC invocation
@@ -53,11 +64,129 @@ type InvokeResponse struct {
 	StatusMessage string
 }
 
-// InvokeUnary performs a unary gRPC call using dynamic invocation
+// InvokeUnary performs a unary call using the specified transport
 func (inv *Invoker) InvokeUnary(ctx context.Context, req InvokeRequest) (*InvokeResponse, error) {
+	// Route based on transport (default to Connect when unspecified/zero value)
+	switch req.Transport {
+	case catalogv1.Transport_TRANSPORT_GRPC:
+		return inv.invokeGRPC(ctx, req)
+	case catalogv1.Transport_TRANSPORT_GRPC_WEB:
+		// gRPC-Web not yet supported, fall back to Connect
+		return inv.invokeConnect(ctx, req)
+	default:
+		// TRANSPORT_CONNECT (0) or any unspecified value defaults to Connect
+		return inv.invokeConnect(ctx, req)
+	}
+}
+
+// invokeConnect performs a unary call using the Connect protocol (HTTP/JSON)
+func (inv *Invoker) invokeConnect(ctx context.Context, req InvokeRequest) (*InvokeResponse, error) {
+	// Build the Connect URL: http(s)://{endpoint}/{service}/{method}
+	scheme := "http"
+	if req.UseTLS {
+		scheme = "https"
+	}
+	url := fmt.Sprintf("%s://%s/%s/%s", scheme, req.Endpoint, req.ServiceName, req.MethodName)
+
+	// Create HTTP request with the JSON body
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(req.RequestJSON))
+	if err != nil {
+		return &InvokeResponse{
+			Success: false,
+			Error:   fmt.Sprintf("failed to create request: %v", err),
+		}, nil
+	}
+
+	// Set Connect protocol headers
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Connect-Protocol-Version", "1")
+
+	// Add custom metadata headers
+	for k, v := range req.Metadata {
+		httpReq.Header.Set(k, v)
+	}
+
+	// Create a client with timeout
+	client := inv.httpClient
+	if req.TimeoutSeconds > 0 {
+		client = &http.Client{
+			Timeout: time.Duration(req.TimeoutSeconds) * time.Second,
+		}
+		if req.UseTLS {
+			client.Transport = &http.Transport{
+				TLSClientConfig: &tls.Config{
+					ServerName: req.ServerName,
+				},
+			}
+		}
+	}
+
+	// Execute the request
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return &InvokeResponse{
+			Success: false,
+			Error:   fmt.Sprintf("request failed: %v", err),
+		}, nil
+	}
+	defer resp.Body.Close()
+
+	// Read response body
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return &InvokeResponse{
+			Success: false,
+			Error:   fmt.Sprintf("failed to read response: %v", err),
+		}, nil
+	}
+
+	// Collect response headers as metadata
+	respMetadata := make(map[string]string)
+	for k, v := range resp.Header {
+		if len(v) > 0 {
+			respMetadata[k] = v[0]
+		}
+	}
+
+	// Check for Connect error response
+	if resp.StatusCode != http.StatusOK {
+		// Try to parse Connect error format
+		var connectErr struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(body, &connectErr) == nil && connectErr.Message != "" {
+			return &InvokeResponse{
+				Success:       false,
+				Error:         connectErr.Message,
+				StatusCode:    int32(resp.StatusCode),
+				StatusMessage: connectErr.Code,
+				Metadata:      respMetadata,
+			}, nil
+		}
+		return &InvokeResponse{
+			Success:       false,
+			Error:         fmt.Sprintf("HTTP %d: %s", resp.StatusCode, string(body)),
+			StatusCode:    int32(resp.StatusCode),
+			StatusMessage: resp.Status,
+			Metadata:      respMetadata,
+		}, nil
+	}
+
+	return &InvokeResponse{
+		Success:       true,
+		ResponseJSON:  body,
+		StatusCode:    0,
+		StatusMessage: "OK",
+		Metadata:      respMetadata,
+	}, nil
+}
+
+// invokeGRPC performs a unary gRPC call using dynamic invocation
+func (inv *Invoker) invokeGRPC(ctx context.Context, req InvokeRequest) (*InvokeResponse, error) {
 	// Validate method descriptor
 	if req.MethodDesc == nil {
-		return nil, fmt.Errorf("method descriptor is required")
+		return nil, fmt.Errorf("method descriptor is required for gRPC transport")
 	}
 
 	if req.MethodDesc.IsClientStreaming() || req.MethodDesc.IsServerStreaming() {
@@ -179,13 +308,14 @@ func (inv *Invoker) getConnection(endpoint string, useTLS bool, serverName strin
 		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	}
 
-	// Add default dial options
-	opts = append(opts,
-		grpc.WithBlock(),
-		grpc.WithTimeout(10*time.Second),
-	)
+	// Use blocking dial with short timeout for fast failure when server is unreachable
+	// This ensures behavior similar to HTTP connect failures
+	dialCtx, dialCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer dialCancel()
 
-	conn, err := grpc.Dial(endpoint, opts...)
+	opts = append(opts, grpc.WithBlock())
+
+	conn, err := grpc.DialContext(dialCtx, endpoint, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial %s: %w", endpoint, err)
 	}

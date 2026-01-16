@@ -1,9 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
-import { Send } from 'lucide-react';
+import { Send, Code, FormInput } from 'lucide-react';
 import type { MessageSchema } from '@/lib/types';
 
 interface RequestEditorProps {
@@ -59,73 +58,115 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({
 
   if (!schema) {
     return (
-      <Card>
-        <CardContent className="p-6">
-          <p className="text-sm text-muted-foreground text-center">
+      <div className="h-full flex items-center justify-center bg-card rounded-lg border">
+        <div className="text-center space-y-2 p-6">
+          <div className="w-10 h-10 rounded-lg bg-muted flex items-center justify-center mx-auto">
+            <FormInput className="w-5 h-5 text-muted-foreground" />
+          </div>
+          <p className="text-sm text-muted-foreground">
             Select a method to begin
           </p>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     );
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center justify-between">
-          <CardTitle>Request</CardTitle>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setJsonMode(!jsonMode)}
+    <div className="h-full flex flex-col">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="font-medium text-sm">Request</h3>
+        <div className="flex items-center gap-1 bg-muted rounded-md p-0.5">
+          <button
+            onClick={() => setJsonMode(false)}
+            className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded transition-colors ${
+              !jsonMode
+                ? 'bg-background text-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
           >
-            {jsonMode ? 'Form' : 'JSON'}
-          </Button>
+            <FormInput className="h-3 w-3" />
+            Form
+          </button>
+          <button
+            onClick={() => setJsonMode(true)}
+            className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded transition-colors ${
+              jsonMode
+                ? 'bg-background text-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <Code className="h-3 w-3" />
+            JSON
+          </button>
         </div>
-      </CardHeader>
-      <CardContent>
-        <form onSubmit={handleFormSubmit} className="space-y-4">
+      </div>
+
+      {/* Form */}
+      <form onSubmit={handleFormSubmit} className="flex-1 flex flex-col min-h-0">
+        <div className="flex-1 overflow-auto">
           {jsonMode ? (
-            <div>
-              <Label htmlFor="json-input">JSON Request</Label>
-              <textarea
-                id="json-input"
-                value={jsonInput}
-                onChange={(e) => setJsonInput(e.target.value)}
-                className="min-h-[200px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                placeholder="{}"
-              />
-            </div>
+            <textarea
+              value={jsonInput}
+              onChange={(e) => setJsonInput(e.target.value)}
+              className="w-full h-full min-h-[200px] rounded-lg border bg-card px-4 py-3 text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background"
+              placeholder="{}"
+              spellCheck={false}
+            />
           ) : (
-            <div className="space-y-3">
-              {schema.fields.map((field) => (
-                <div key={field.name} className="space-y-1">
-                  <Label htmlFor={field.name}>
-                    {field.name}
-                    {!field.optional && (
-                      <span className="text-destructive ml-1">*</span>
+            <div className="space-y-4 bg-card rounded-lg border p-4">
+              {schema.fields.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-4">
+                  No input fields required
+                </p>
+              ) : (
+                schema.fields.map((field) => (
+                  <div key={field.name} className="space-y-1.5">
+                    <Label htmlFor={field.name} className="text-sm font-medium">
+                      {field.name}
+                      {!field.optional && (
+                        <span className="text-red-500 ml-0.5">*</span>
+                      )}
+                    </Label>
+                    <Input
+                      id={field.name}
+                      value={formData[field.name] || ''}
+                      onChange={(e) => handleFieldChange(field.name, e.target.value)}
+                      placeholder={field.type + (field.repeated ? '[]' : '')}
+                      className="font-mono text-sm"
+                    />
+                    {field.description && (
+                      <p className="text-xs text-muted-foreground">{field.description}</p>
                     )}
-                  </Label>
-                  <Input
-                    id={field.name}
-                    value={formData[field.name] || ''}
-                    onChange={(e) =>
-                      handleFieldChange(field.name, e.target.value)
-                    }
-                    placeholder={`${field.type}${field.repeated ? '[]' : ''}`}
-                    required={!field.optional}
-                  />
-                </div>
-              ))}
+                  </div>
+                ))
+              )}
             </div>
           )}
+        </div>
 
-          <Button type="submit" disabled={loading} className="w-full">
-            <Send className="mr-2 h-4 w-4" />
-            {loading ? 'Sending...' : 'Send Request'}
+        {/* Submit Button */}
+        <div className="pt-4 shrink-0">
+          <Button
+            type="submit"
+            disabled={loading}
+            className="w-full"
+            size="default"
+          >
+            {loading ? (
+              <>
+                <div className="animate-spin rounded-full h-4 w-4 border-2 border-primary-foreground border-t-transparent mr-2" />
+                Sending...
+              </>
+            ) : (
+              <>
+                <Send className="mr-2 h-4 w-4" />
+                Send Request
+              </>
+            )}
           </Button>
-        </form>
-      </CardContent>
-    </Card>
+        </div>
+      </form>
+    </div>
   );
 };

@@ -114,6 +114,18 @@ message GetServiceSchemaResponse {
   string error = 3;
 }
 
+// Transport specifies the protocol to use for invocation
+enum Transport {
+  // Default: HTTP with Connect protocol (JSON over HTTP)
+  TRANSPORT_CONNECT = 0;
+
+  // gRPC protocol (HTTP/2 with binary protobuf)
+  TRANSPORT_GRPC = 1;
+
+  // gRPC-Web protocol (for browser compatibility)
+  TRANSPORT_GRPC_WEB = 2;
+}
+
 // InvokeGRPCRequest specifies the gRPC call to make
 message InvokeGRPCRequest {
   // Target gRPC endpoint (e.g., "localhost:8080")
@@ -139,6 +151,9 @@ message InvokeGRPCRequest {
 
   // Optional: metadata headers
   map<string, string> metadata = 8;
+
+  // Optional: transport protocol (default: TRANSPORT_CONNECT)
+  Transport transport = 9;
 }
 
 // InvokeGRPCResponse returns the result of a gRPC call

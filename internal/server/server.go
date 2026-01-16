@@ -240,6 +240,7 @@ func (s *CatalogServer) InvokeGRPC(
 		TimeoutSeconds: timeoutSeconds,
 		Metadata:       req.Msg.Metadata,
 		MethodDesc:     methodDesc,
+		Transport:      req.Msg.Transport,
 	}
 
 	// Perform invocation

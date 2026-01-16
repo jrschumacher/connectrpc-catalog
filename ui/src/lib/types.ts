@@ -2,6 +2,7 @@ export interface ServiceInfo {
   name: string;
   fullName: string;
   methods: MethodInfo[];
+  endpoint?: string; // Target endpoint for this service
 }
 
 export interface MethodInfo {
