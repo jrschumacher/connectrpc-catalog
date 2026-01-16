@@ -3,6 +3,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { catalogClient } from '@/lib/client';
+import { LoadProtosRequest } from '@/gen/catalog/v1/catalog_pb';
 import { Upload, Github, Package, Folder, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
 
 type SourceType = 'buf_module' | 'proto_path' | 'proto_repo';
@@ -54,15 +55,16 @@ export function LoadProtos({ onLoadSuccess }: LoadProtosProps) {
     setSuccess(undefined);
 
     try {
-      const request: any = {};
+      // Build request with proper oneof structure for proto-es
+      const sourceCase = sourceType === 'buf_module' ? 'bufModule' as const :
+                         sourceType === 'proto_path' ? 'protoPath' as const : 'protoRepo' as const;
 
-      if (sourceType === 'buf_module') {
-        request.bufModule = sourceValue;
-      } else if (sourceType === 'proto_path') {
-        request.protoPath = sourceValue;
-      } else if (sourceType === 'proto_repo') {
-        request.protoRepo = sourceValue;
-      }
+      const request = new LoadProtosRequest({
+        source: {
+          case: sourceCase,
+          value: sourceValue,
+        },
+      });
 
       const result = await catalogClient.loadProtos(request);
 

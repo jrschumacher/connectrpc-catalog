@@ -4,6 +4,7 @@ modules:
     name: buf.build/opentdf/connectrpc-catalog
 deps:
   - buf.build/googleapis/googleapis
+  - buf.build/connectrpc/eliza
 lint:
   use:
     - STANDARD
