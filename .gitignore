@@ -11,6 +11,7 @@ go.work.sum
 
 # Build artifacts
 /connectrpc-catalog
+/catalog-server
 /dist/
 /bin/
 
@@ -42,3 +43,7 @@ pnpm-debug.log*
 # Temporary files
 *.tmp
 *.log
+
+# Test artifacts
+/test-results/
+/playwright-report/
