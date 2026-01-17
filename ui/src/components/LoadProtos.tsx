@@ -1,20 +1,45 @@
 import { useState } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
-import { Badge } from '@/components/ui/badge';
 import { catalogClient } from '@/lib/client';
+import { LoadProtosRequest } from '@/gen/catalog/v1/catalog_pb';
+import { Upload, Github, Package, Folder, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
 
 type SourceType = 'buf_module' | 'proto_path' | 'proto_repo';
 
 interface LoadProtosProps {
-  onLoadSuccess: () => void;
+  onLoadSuccess: (endpoint?: string) => void;
 }
+
+const sourceOptions = [
+  {
+    type: 'buf_module' as SourceType,
+    label: 'Buf Registry',
+    icon: Package,
+    placeholder: 'buf.build/connectrpc/eliza',
+    description: 'Load from Buf Schema Registry',
+  },
+  {
+    type: 'proto_path' as SourceType,
+    label: 'Local Path',
+    icon: Folder,
+    placeholder: '/path/to/protos',
+    description: 'Load from local filesystem',
+  },
+  {
+    type: 'proto_repo' as SourceType,
+    label: 'GitHub',
+    icon: Github,
+    placeholder: 'github.com/connectrpc/eliza',
+    description: 'Load from GitHub repository',
+  },
+];
 
 export function LoadProtos({ onLoadSuccess }: LoadProtosProps) {
   const [sourceType, setSourceType] = useState<SourceType>('buf_module');
   const [sourceValue, setSourceValue] = useState('');
+  const [endpoint, setEndpoint] = useState('localhost:50051');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const [success, setSuccess] = useState<string | undefined>();
@@ -30,28 +55,27 @@ export function LoadProtos({ onLoadSuccess }: LoadProtosProps) {
     setSuccess(undefined);
 
     try {
-      const request: any = {};
+      // Build request with proper oneof structure for proto-es
+      const sourceCase = sourceType === 'buf_module' ? 'bufModule' as const :
+                         sourceType === 'proto_path' ? 'protoPath' as const : 'protoRepo' as const;
 
-      // Map source type to proto field name
-      if (sourceType === 'buf_module') {
-        request.bufModule = sourceValue;
-      } else if (sourceType === 'proto_path') {
-        request.protoPath = sourceValue;
-      } else if (sourceType === 'proto_repo') {
-        request.protoRepo = sourceValue;
-      }
+      const request = new LoadProtosRequest({
+        source: {
+          case: sourceCase,
+          value: sourceValue,
+        },
+      });
 
       const result = await catalogClient.loadProtos(request);
 
       if ((result as any).success) {
         const serviceCount = (result as any).serviceCount || 0;
         const fileCount = (result as any).fileCount || 0;
-        setSuccess(`Successfully loaded ${serviceCount} services from ${fileCount} files`);
+        setSuccess(`Loaded ${serviceCount} service${serviceCount !== 1 ? 's' : ''} from ${fileCount} file${fileCount !== 1 ? 's' : ''}`);
         setSourceValue('');
 
-        // Notify parent to refresh services
         setTimeout(() => {
-          onLoadSuccess();
+          onLoadSuccess(endpoint.trim() || undefined);
         }, 500);
       } else {
         setError((result as any).error || 'Failed to load protos');
@@ -64,119 +88,132 @@ export function LoadProtos({ onLoadSuccess }: LoadProtosProps) {
     }
   };
 
-  const getPlaceholder = () => {
-    switch (sourceType) {
-      case 'buf_module':
-        return 'buf.build/connectrpc/eliza';
-      case 'proto_path':
-        return '/path/to/proto/files';
-      case 'proto_repo':
-        return 'github.com/connectrpc/eliza';
-      default:
-        return '';
-    }
-  };
-
-  const getDescription = () => {
-    switch (sourceType) {
-      case 'buf_module':
-        return 'Load from Buf Schema Registry (e.g., buf.build/owner/repo or owner/repo)';
-      case 'proto_path':
-        return 'Load from local filesystem directory containing .proto files';
-      case 'proto_repo':
-        return 'Load from GitHub repository (e.g., github.com/owner/repo)';
-      default:
-        return '';
-    }
-  };
+  const currentSource = sourceOptions.find((s) => s.type === sourceType)!;
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Load Proto Definitions</CardTitle>
-        <CardDescription>
-          Load service definitions from various sources to explore APIs
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="space-y-2">
-          <Label>Source Type</Label>
-          <div className="flex gap-2">
-            <Button
-              variant={sourceType === 'buf_module' ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => setSourceType('buf_module')}
-            >
-              Buf Module
-            </Button>
-            <Button
-              variant={sourceType === 'proto_path' ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => setSourceType('proto_path')}
-            >
-              Local Path
-            </Button>
-            <Button
-              variant={sourceType === 'proto_repo' ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => setSourceType('proto_repo')}
-            >
-              GitHub Repo
-            </Button>
-          </div>
-          <p className="text-xs text-muted-foreground">{getDescription()}</p>
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="text-center space-y-2">
+        <div className="w-14 h-14 rounded-2xl bg-primary/10 flex items-center justify-center mx-auto">
+          <Upload className="w-7 h-7 text-primary" />
         </div>
+        <h2 className="text-xl font-semibold">Load Proto Definitions</h2>
+        <p className="text-sm text-muted-foreground">
+          Import service definitions to explore and test APIs
+        </p>
+      </div>
 
-        <div className="space-y-2">
-          <Label htmlFor="source-value">Source</Label>
-          <div className="flex gap-2">
-            <Input
-              id="source-value"
-              placeholder={getPlaceholder()}
-              value={sourceValue}
-              onChange={(e) => setSourceValue(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !loading) {
-                  handleLoad();
-                }
+      {/* Source Type Selection */}
+      <div className="space-y-2">
+        <Label className="text-sm font-medium">Source</Label>
+        <div className="grid grid-cols-3 gap-2">
+          {sourceOptions.map((option) => {
+            const Icon = option.icon;
+            const isSelected = sourceType === option.type;
+            return (
+              <button
+                key={option.type}
+                onClick={() => setSourceType(option.type)}
+                className={`flex flex-col items-center gap-2 p-3 rounded-lg border transition-all ${
+                  isSelected
+                    ? 'bg-primary/5 border-primary text-primary'
+                    : 'bg-card border-border hover:border-primary/50 text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                <Icon className="w-5 h-5" />
+                <span className="text-xs font-medium">{option.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Source Input */}
+      <div className="space-y-2">
+        <Label htmlFor="source-input" className="text-sm font-medium">
+          {currentSource.label}
+        </Label>
+        <Input
+          id="source-input"
+          placeholder={currentSource.placeholder}
+          value={sourceValue}
+          onChange={(e) => setSourceValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !loading) {
+              handleLoad();
+            }
+          }}
+          disabled={loading}
+          className="font-mono text-sm"
+        />
+        <p className="text-xs text-muted-foreground">{currentSource.description}</p>
+      </div>
+
+      {/* Target Endpoint */}
+      <div className="space-y-2">
+        <Label htmlFor="endpoint-input" className="text-sm font-medium">
+          Target Endpoint
+        </Label>
+        <Input
+          id="endpoint-input"
+          placeholder="localhost:50051"
+          value={endpoint}
+          onChange={(e) => setEndpoint(e.target.value)}
+          disabled={loading}
+          className="font-mono text-sm"
+        />
+        <p className="text-xs text-muted-foreground">Where this service runs (used when invoking methods)</p>
+      </div>
+
+      {/* Load Button */}
+      <Button onClick={handleLoad} disabled={loading || !sourceValue.trim()} className="w-full">
+        {loading ? (
+          <Loader2 className="w-4 h-4 animate-spin mr-2" />
+        ) : null}
+        {loading ? 'Loading...' : 'Load Protos'}
+      </Button>
+
+      {/* Status Messages */}
+      {error && (
+        <div className="flex items-start gap-3 p-3 rounded-lg bg-red-500/5 border border-red-500/20">
+          <AlertCircle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
+          <div className="space-y-1">
+            <p className="text-sm font-medium text-red-600">Failed to load</p>
+            <p className="text-sm text-red-600/80">{error}</p>
+          </div>
+        </div>
+      )}
+
+      {success && (
+        <div className="flex items-start gap-3 p-3 rounded-lg bg-green-500/5 border border-green-500/20">
+          <CheckCircle className="w-5 h-5 text-green-500 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-medium text-green-600">{success}</p>
+          </div>
+        </div>
+      )}
+
+      {/* Examples */}
+      <div className="pt-4 border-t space-y-2">
+        <p className="text-xs font-medium text-muted-foreground">Quick examples</p>
+        <div className="grid gap-1.5">
+          {[
+            { type: 'buf_module', value: 'buf.build/connectrpc/eliza' },
+            { type: 'buf_module', value: 'buf.build/grpc/grpc' },
+          ].map((example) => (
+            <button
+              key={example.value}
+              onClick={() => {
+                setSourceType(example.type as SourceType);
+                setSourceValue(example.value);
               }}
-              disabled={loading}
-            />
-            <Button onClick={handleLoad} disabled={loading || !sourceValue.trim()}>
-              {loading ? 'Loading...' : 'Load'}
-            </Button>
-          </div>
+              className="text-left text-xs font-mono px-2 py-1.5 rounded bg-muted hover:bg-accent transition-colors"
+            >
+              {example.value}
+            </button>
+          ))}
         </div>
-
-        {error && (
-          <div className="p-3 rounded-md bg-destructive/10 border border-destructive/20">
-            <p className="text-sm text-destructive font-medium">Error</p>
-            <p className="text-sm text-destructive/80 mt-1">{error}</p>
-          </div>
-        )}
-
-        {success && (
-          <div className="p-3 rounded-md bg-green-500/10 border border-green-500/20">
-            <div className="flex items-center gap-2">
-              <Badge variant="outline" className="bg-green-500/20 text-green-700 border-green-500/30">
-                Success
-              </Badge>
-              <p className="text-sm text-green-700">{success}</p>
-            </div>
-          </div>
-        )}
-
-        <div className="pt-2 border-t">
-          <p className="text-xs text-muted-foreground">
-            <strong>Examples:</strong>
-          </p>
-          <ul className="text-xs text-muted-foreground mt-1 space-y-1 ml-4">
-            <li>• Buf Module: <code className="bg-muted px-1 py-0.5 rounded">buf.build/connectrpc/eliza</code></li>
-            <li>• Local Path: <code className="bg-muted px-1 py-0.5 rounded">./proto</code></li>
-            <li>• GitHub: <code className="bg-muted px-1 py-0.5 rounded">github.com/connectrpc/eliza</code></li>
-          </ul>
-        </div>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }

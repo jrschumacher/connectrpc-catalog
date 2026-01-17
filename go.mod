@@ -4,6 +4,7 @@ go 1.24.0
 
 require (
 	connectrpc.com/connect v1.17.0
+	github.com/golang/protobuf v1.5.4
 	github.com/jhump/protoreflect v1.16.0
 	golang.org/x/net v0.49.0
 	google.golang.org/grpc v1.65.0
@@ -12,7 +13,6 @@ require (
 
 require (
 	github.com/bufbuild/protocompile v0.14.0 // indirect
-	github.com/golang/protobuf v1.5.4 // indirect
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
 	golang.org/x/text v0.33.0 // indirect

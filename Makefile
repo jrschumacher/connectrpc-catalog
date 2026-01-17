@@ -1,4 +1,4 @@
-.PHONY: all build clean dev ui backend test run help
+.PHONY: all build clean dev ui backend test test-e2e run help
 
 # Default target
 all: build
@@ -41,6 +41,11 @@ test:
 	@echo "Running tests..."
 	@go test -v ./...
 
+# Run full-stack E2E tests (starts backend, runs Playwright tests, stops backend)
+test-e2e: build
+	@echo "Running full-stack E2E tests..."
+	@./test-e2e-full.sh
+
 # Run the built binary
 run: build
 	@echo "Starting ConnectRPC Catalog..."
@@ -73,6 +78,7 @@ help:
 	@echo "  make ui          - Run UI development server"
 	@echo "  make backend     - Run backend server"
 	@echo "  make test        - Run tests"
+	@echo "  make test-e2e    - Run full-stack E2E tests (backend + Playwright)"
 	@echo "  make run         - Build and run the binary"
 	@echo "  make install-ui  - Install UI dependencies"
 	@echo "  make gen         - Generate protobuf code"

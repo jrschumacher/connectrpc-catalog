@@ -27,6 +27,11 @@ if [ ! -d "ui/dist" ]; then
     exit 1
 fi
 
+# Copy UI assets to Go embed location
+echo "Copying UI assets to embed location..."
+rm -rf cmd/connectrpc-catalog/dist
+cp -r ui/dist cmd/connectrpc-catalog/dist
+
 # Step 2: Build the Go binary
 echo ""
 echo "Step 2: Building Go binary..."
