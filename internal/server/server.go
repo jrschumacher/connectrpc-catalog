@@ -9,21 +9,19 @@ import (
 	catalogv1 "github.com/opentdf/connectrpc-catalog/gen/catalog/v1"
 	"github.com/opentdf/connectrpc-catalog/internal/invoker"
 	"github.com/opentdf/connectrpc-catalog/internal/loader"
-	"github.com/opentdf/connectrpc-catalog/internal/registry"
+	"github.com/opentdf/connectrpc-catalog/internal/session"
 	"google.golang.org/protobuf/types/descriptorpb"
 )
 
 // CatalogServer implements the CatalogService ConnectRPC handlers
 type CatalogServer struct {
-	registry *registry.Registry
-	invoker  *invoker.Invoker
+	sessionManager *session.Manager
 }
 
 // New creates a new CatalogServer instance
 func New() *CatalogServer {
 	return &CatalogServer{
-		registry: registry.New(),
-		invoker:  invoker.New(),
+		sessionManager: session.NewManager(session.DefaultSessionTTL),
 	}
 }
 
@@ -32,36 +30,72 @@ func (s *CatalogServer) LoadProtos(
 	ctx context.Context,
 	req *connect.Request[catalogv1.LoadProtosRequest],
 ) (*connect.Response[catalogv1.LoadProtosResponse], error) {
+	// Get or create session
+	sessionID := req.Header().Get("X-Session-ID")
+	state, newSessionID, err := s.sessionManager.GetOrCreate(sessionID)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
 	// Determine the source type and load descriptors
 	var fds *descriptorpb.FileDescriptorSet
-	var err error
 
 	switch source := req.Msg.Source.(type) {
 	case *catalogv1.LoadProtosRequest_ProtoPath:
 		fds, err = loader.LoadFromPath(source.ProtoPath)
 		if err != nil {
-			return connect.NewResponse(&catalogv1.LoadProtosResponse{
+			resp := connect.NewResponse(&catalogv1.LoadProtosResponse{
 				Success: false,
 				Error:   fmt.Sprintf("failed to load from path: %v", err),
-			}), nil
+			})
+			resp.Header().Set("X-Session-ID", newSessionID)
+			return resp, nil
 		}
 
 	case *catalogv1.LoadProtosRequest_ProtoRepo:
 		fds, err = loader.LoadFromGitHub(source.ProtoRepo)
 		if err != nil {
-			return connect.NewResponse(&catalogv1.LoadProtosResponse{
+			resp := connect.NewResponse(&catalogv1.LoadProtosResponse{
 				Success: false,
 				Error:   fmt.Sprintf("failed to load from GitHub: %v", err),
-			}), nil
+			})
+			resp.Header().Set("X-Session-ID", newSessionID)
+			return resp, nil
 		}
 
 	case *catalogv1.LoadProtosRequest_BufModule:
 		fds, err = loader.LoadFromBufModule(source.BufModule)
 		if err != nil {
-			return connect.NewResponse(&catalogv1.LoadProtosResponse{
+			resp := connect.NewResponse(&catalogv1.LoadProtosResponse{
 				Success: false,
 				Error:   fmt.Sprintf("failed to load from Buf module: %v", err),
-			}), nil
+			})
+			resp.Header().Set("X-Session-ID", newSessionID)
+			return resp, nil
+		}
+
+	case *catalogv1.LoadProtosRequest_ReflectionEndpoint:
+		// Build reflection options from request
+		opts := loader.ReflectionOptions{
+			UseTLS:         true, // Default to TLS
+			TimeoutSeconds: 10,   // Default timeout
+		}
+		if refOpts := req.Msg.GetReflectionOptions(); refOpts != nil {
+			opts.UseTLS = refOpts.GetUseTls()
+			opts.ServerName = refOpts.GetServerName()
+			if refOpts.GetTimeoutSeconds() > 0 {
+				opts.TimeoutSeconds = refOpts.GetTimeoutSeconds()
+			}
+		}
+
+		fds, err = loader.LoadFromReflection(source.ReflectionEndpoint, opts)
+		if err != nil {
+			resp := connect.NewResponse(&catalogv1.LoadProtosResponse{
+				Success: false,
+				Error:   fmt.Sprintf("failed to load from reflection: %v", err),
+			})
+			resp.Header().Set("X-Session-ID", newSessionID)
+			return resp, nil
 		}
 
 	default:
@@ -71,22 +105,26 @@ func (s *CatalogServer) LoadProtos(
 		)
 	}
 
-	// Register the loaded descriptors
-	if err := s.registry.Register(fds); err != nil {
-		return connect.NewResponse(&catalogv1.LoadProtosResponse{
+	// Register the loaded descriptors using session registry
+	if err := state.Registry.Register(fds); err != nil {
+		resp := connect.NewResponse(&catalogv1.LoadProtosResponse{
 			Success: false,
 			Error:   fmt.Sprintf("failed to register descriptors: %v", err),
-		}), nil
+		})
+		resp.Header().Set("X-Session-ID", newSessionID)
+		return resp, nil
 	}
 
 	// Get statistics
 	info := loader.GetDescriptorInfo(fds)
 
-	return connect.NewResponse(&catalogv1.LoadProtosResponse{
+	resp := connect.NewResponse(&catalogv1.LoadProtosResponse{
 		Success:      true,
 		ServiceCount: int32(len(info.Services)),
 		FileCount:    int32(info.Files),
-	}), nil
+	})
+	resp.Header().Set("X-Session-ID", newSessionID)
+	return resp, nil
 }
 
 // ListServices implements the ListServices RPC handler
@@ -94,8 +132,15 @@ func (s *CatalogServer) ListServices(
 	ctx context.Context,
 	req *connect.Request[catalogv1.ListServicesRequest],
 ) (*connect.Response[catalogv1.ListServicesResponse], error) {
-	// Get all services from registry
-	services := s.registry.ListServices()
+	// Get or create session
+	sessionID := req.Header().Get("X-Session-ID")
+	state, newSessionID, err := s.sessionManager.GetOrCreate(sessionID)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	// Get all services from session registry
+	services := state.Registry.ListServices()
 
 	// Convert to proto response format
 	protoServices := make([]*catalogv1.ServiceInfo, len(services))
@@ -120,9 +165,11 @@ func (s *CatalogServer) ListServices(
 		}
 	}
 
-	return connect.NewResponse(&catalogv1.ListServicesResponse{
+	resp := connect.NewResponse(&catalogv1.ListServicesResponse{
 		Services: protoServices,
-	}), nil
+	})
+	resp.Header().Set("X-Session-ID", newSessionID)
+	return resp, nil
 }
 
 // GetServiceSchema implements the GetServiceSchema RPC handler
@@ -130,6 +177,13 @@ func (s *CatalogServer) GetServiceSchema(
 	ctx context.Context,
 	req *connect.Request[catalogv1.GetServiceSchemaRequest],
 ) (*connect.Response[catalogv1.GetServiceSchemaResponse], error) {
+	// Get or create session
+	sessionID := req.Header().Get("X-Session-ID")
+	state, newSessionID, err := s.sessionManager.GetOrCreate(sessionID)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
 	serviceName := req.Msg.ServiceName
 
 	if serviceName == "" {
@@ -139,12 +193,14 @@ func (s *CatalogServer) GetServiceSchema(
 		)
 	}
 
-	// Get service schema from registry
-	serviceInfo, messageSchemas, err := s.registry.GetServiceSchema(serviceName)
+	// Get service schema from session registry
+	serviceInfo, messageSchemas, err := state.Registry.GetServiceSchema(serviceName)
 	if err != nil {
-		return connect.NewResponse(&catalogv1.GetServiceSchemaResponse{
+		resp := connect.NewResponse(&catalogv1.GetServiceSchemaResponse{
 			Error: fmt.Sprintf("failed to get service schema: %v", err),
-		}), nil
+		})
+		resp.Header().Set("X-Session-ID", newSessionID)
+		return resp, nil
 	}
 
 	// Convert service info to proto format
@@ -167,10 +223,12 @@ func (s *CatalogServer) GetServiceSchema(
 		Documentation: serviceInfo.Documentation,
 	}
 
-	return connect.NewResponse(&catalogv1.GetServiceSchemaResponse{
+	resp := connect.NewResponse(&catalogv1.GetServiceSchemaResponse{
 		Service:        protoServiceInfo,
 		MessageSchemas: messageSchemas,
-	}), nil
+	})
+	resp.Header().Set("X-Session-ID", newSessionID)
+	return resp, nil
 }
 
 // InvokeGRPC implements the InvokeGRPC RPC handler
@@ -178,6 +236,13 @@ func (s *CatalogServer) InvokeGRPC(
 	ctx context.Context,
 	req *connect.Request[catalogv1.InvokeGRPCRequest],
 ) (*connect.Response[catalogv1.InvokeGRPCResponse], error) {
+	// Get or create session
+	sessionID := req.Header().Get("X-Session-ID")
+	state, newSessionID, err := s.sessionManager.GetOrCreate(sessionID)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
 	// Validate required fields
 	if req.Msg.Endpoint == "" {
 		return nil, connect.NewError(
@@ -198,21 +263,25 @@ func (s *CatalogServer) InvokeGRPC(
 		)
 	}
 
-	// Get method descriptor from registry
-	methodDesc, err := s.registry.GetMethodDescriptor(req.Msg.Service, req.Msg.Method)
+	// Get method descriptor from session registry
+	methodDesc, err := state.Registry.GetMethodDescriptor(req.Msg.Service, req.Msg.Method)
 	if err != nil {
-		return connect.NewResponse(&catalogv1.InvokeGRPCResponse{
+		resp := connect.NewResponse(&catalogv1.InvokeGRPCResponse{
 			Success: false,
 			Error:   fmt.Sprintf("method not found: %v", err),
-		}), nil
+		})
+		resp.Header().Set("X-Session-ID", newSessionID)
+		return resp, nil
 	}
 
 	// Check for streaming methods (not supported in MVP)
 	if methodDesc.IsClientStreaming() || methodDesc.IsServerStreaming() {
-		return connect.NewResponse(&catalogv1.InvokeGRPCResponse{
+		resp := connect.NewResponse(&catalogv1.InvokeGRPCResponse{
 			Success: false,
 			Error:   "streaming methods are not supported in MVP (unary only)",
-		}), nil
+		})
+		resp.Header().Set("X-Session-ID", newSessionID)
+		return resp, nil
 	}
 
 	// Parse request JSON
@@ -243,72 +312,59 @@ func (s *CatalogServer) InvokeGRPC(
 		Transport:      req.Msg.Transport,
 	}
 
-	// Perform invocation
-	invokeResp, err := s.invoker.InvokeUnary(ctx, invokeReq)
+	// Perform invocation using session invoker
+	invokeResp, err := state.Invoker.InvokeUnary(ctx, invokeReq)
 	if err != nil {
-		return connect.NewResponse(&catalogv1.InvokeGRPCResponse{
+		resp := connect.NewResponse(&catalogv1.InvokeGRPCResponse{
 			Success: false,
 			Error:   fmt.Sprintf("invocation error: %v", err),
-		}), nil
+		})
+		resp.Header().Set("X-Session-ID", newSessionID)
+		return resp, nil
 	}
 
 	// Convert response
-	return connect.NewResponse(&catalogv1.InvokeGRPCResponse{
+	resp := connect.NewResponse(&catalogv1.InvokeGRPCResponse{
 		Success:       invokeResp.Success,
 		ResponseJson:  string(invokeResp.ResponseJSON),
 		Error:         invokeResp.Error,
 		Metadata:      invokeResp.Metadata,
 		StatusCode:    invokeResp.StatusCode,
 		StatusMessage: invokeResp.StatusMessage,
-	}), nil
+	})
+	resp.Header().Set("X-Session-ID", newSessionID)
+	return resp, nil
 }
 
 // Close releases all resources held by the server
 func (s *CatalogServer) Close() error {
-	if s.invoker != nil {
-		return s.invoker.Close()
+	if s.sessionManager != nil {
+		s.sessionManager.Close()
 	}
 	return nil
 }
 
-// GetRegistry returns the underlying registry (for testing/inspection)
-func (s *CatalogServer) GetRegistry() *registry.Registry {
-	return s.registry
-}
-
-// GetInvoker returns the underlying invoker (for testing/inspection)
-func (s *CatalogServer) GetInvoker() *invoker.Invoker {
-	return s.invoker
+// GetSessionManager returns the session manager (for testing/inspection)
+func (s *CatalogServer) GetSessionManager() *session.Manager {
+	return s.sessionManager
 }
 
 // Stats returns server statistics
 type Stats struct {
-	RegistryStats       registry.Stats
-	ConnectionStats     invoker.ConnectionStats
-	TotalLoadedServices int
-	TotalInvocations    int
+	SessionStats session.Stats
 }
 
 // GetStats returns current server statistics
 func (s *CatalogServer) GetStats() Stats {
 	return Stats{
-		RegistryStats:   s.registry.GetStats(),
-		ConnectionStats: s.invoker.GetConnectionStats(),
+		SessionStats: s.sessionManager.GetStats(),
 	}
-}
-
-// ClearRegistry clears all loaded descriptors from the registry
-func (s *CatalogServer) ClearRegistry() {
-	s.registry.Clear()
 }
 
 // ValidateSetup checks if the server is properly configured
 func (s *CatalogServer) ValidateSetup() error {
-	if s.registry == nil {
-		return fmt.Errorf("registry is nil")
-	}
-	if s.invoker == nil {
-		return fmt.Errorf("invoker is nil")
+	if s.sessionManager == nil {
+		return fmt.Errorf("session manager is nil")
 	}
 	return nil
 }

@@ -75,7 +75,23 @@ export class LoadProtosRequest extends Message<LoadProtosRequest> {
      */
     value: string;
     case: "bufModule";
+  } | {
+    /**
+     * gRPC reflection endpoint (e.g., "demo.connectrpc.com:443")
+     * Will use server reflection to discover services
+     *
+     * @generated from field: string reflection_endpoint = 4;
+     */
+    value: string;
+    case: "reflectionEndpoint";
   } | { case: undefined; value?: undefined } = { case: undefined };
+
+  /**
+   * Options for reflection-based discovery
+   *
+   * @generated from field: catalog.v1.ReflectionOptions reflection_options = 10;
+   */
+  reflectionOptions?: ReflectionOptions;
 
   constructor(data?: PartialMessage<LoadProtosRequest>) {
     super();
@@ -88,6 +104,8 @@ export class LoadProtosRequest extends Message<LoadProtosRequest> {
     { no: 1, name: "proto_path", kind: "scalar", T: 9 /* ScalarType.STRING */, oneof: "source" },
     { no: 2, name: "proto_repo", kind: "scalar", T: 9 /* ScalarType.STRING */, oneof: "source" },
     { no: 3, name: "buf_module", kind: "scalar", T: 9 /* ScalarType.STRING */, oneof: "source" },
+    { no: 4, name: "reflection_endpoint", kind: "scalar", T: 9 /* ScalarType.STRING */, oneof: "source" },
+    { no: 10, name: "reflection_options", kind: "message", T: ReflectionOptions },
   ]);
 
   static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): LoadProtosRequest {
@@ -104,6 +122,63 @@ export class LoadProtosRequest extends Message<LoadProtosRequest> {
 
   static equals(a: LoadProtosRequest | PlainMessage<LoadProtosRequest> | undefined, b: LoadProtosRequest | PlainMessage<LoadProtosRequest> | undefined): boolean {
     return proto3.util.equals(LoadProtosRequest, a, b);
+  }
+}
+
+/**
+ * ReflectionOptions configures how reflection discovery works
+ *
+ * @generated from message catalog.v1.ReflectionOptions
+ */
+export class ReflectionOptions extends Message<ReflectionOptions> {
+  /**
+   * Use TLS for the connection (default: true for endpoints with port 443)
+   *
+   * @generated from field: bool use_tls = 1;
+   */
+  useTls = false;
+
+  /**
+   * Server name override for TLS (optional)
+   *
+   * @generated from field: string server_name = 2;
+   */
+  serverName = "";
+
+  /**
+   * Timeout for reflection discovery in seconds (default: 10)
+   *
+   * @generated from field: int32 timeout_seconds = 3;
+   */
+  timeoutSeconds = 0;
+
+  constructor(data?: PartialMessage<ReflectionOptions>) {
+    super();
+    proto3.util.initPartial(data, this);
+  }
+
+  static readonly runtime: typeof proto3 = proto3;
+  static readonly typeName = "catalog.v1.ReflectionOptions";
+  static readonly fields: FieldList = proto3.util.newFieldList(() => [
+    { no: 1, name: "use_tls", kind: "scalar", T: 8 /* ScalarType.BOOL */ },
+    { no: 2, name: "server_name", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 3, name: "timeout_seconds", kind: "scalar", T: 5 /* ScalarType.INT32 */ },
+  ]);
+
+  static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): ReflectionOptions {
+    return new ReflectionOptions().fromBinary(bytes, options);
+  }
+
+  static fromJson(jsonValue: JsonValue, options?: Partial<JsonReadOptions>): ReflectionOptions {
+    return new ReflectionOptions().fromJson(jsonValue, options);
+  }
+
+  static fromJsonString(jsonString: string, options?: Partial<JsonReadOptions>): ReflectionOptions {
+    return new ReflectionOptions().fromJsonString(jsonString, options);
+  }
+
+  static equals(a: ReflectionOptions | PlainMessage<ReflectionOptions> | undefined, b: ReflectionOptions | PlainMessage<ReflectionOptions> | undefined): boolean {
+    return proto3.util.equals(ReflectionOptions, a, b);
   }
 }
 

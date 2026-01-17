@@ -31,7 +31,26 @@ message LoadProtosRequest {
 
     // Buf registry module (e.g., "buf.build/connectrpc/eliza")
     string buf_module = 3;
+
+    // gRPC reflection endpoint (e.g., "demo.connectrpc.com:443")
+    // Will use server reflection to discover services
+    string reflection_endpoint = 4;
   }
+
+  // Options for reflection-based discovery
+  ReflectionOptions reflection_options = 10;
+}
+
+// ReflectionOptions configures how reflection discovery works
+message ReflectionOptions {
+  // Use TLS for the connection (default: true for endpoints with port 443)
+  bool use_tls = 1;
+
+  // Server name override for TLS (optional)
+  string server_name = 2;
+
+  // Timeout for reflection discovery in seconds (default: 10)
+  int32 timeout_seconds = 3;
 }
 
 // LoadProtosResponse returns the result of loading protos
