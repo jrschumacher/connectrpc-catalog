@@ -7,7 +7,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
-      '@gen': path.resolve(__dirname, '../gen'),
+      '@gen': path.resolve(__dirname, './src/gen'),
       // Resolve protobuf packages from ui/node_modules for gen directory
       '@bufbuild/protobuf': path.resolve(__dirname, 'node_modules/@bufbuild/protobuf'),
       '@connectrpc/connect': path.resolve(__dirname, 'node_modules/@connectrpc/connect'),
