@@ -12,11 +12,13 @@ go.work.sum
 # Build artifacts
 /connectrpc-catalog
 /catalog-server
-/dist/
 /bin/
 
-# Generated code
-/gen/
+# Build output (any dist/ directory)
+**/dist/
+
+# Generated code (any gen/ directory)
+**/gen/
 
 # IDE
 .idea/
@@ -36,8 +38,7 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# UI build output
-/ui/dist/
+# UI build output (covered by **/dist/ above)
 /ui/build/
 
 # Temporary files
