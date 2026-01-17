@@ -60,6 +60,8 @@ install-ui:
 gen:
 	@echo "Generating protobuf code..."
 	@buf generate
+	@echo "Generating eliza service protos (test dependency)..."
+	@buf generate buf.build/connectrpc/eliza
 
 # Format code
 fmt:

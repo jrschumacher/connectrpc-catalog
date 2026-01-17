@@ -4,8 +4,8 @@ import { MethodDetails } from '@/components/MethodDetails';
 import { RequestEditor } from '@/components/RequestEditor';
 import { ResponseViewer } from '@/components/ResponseViewer';
 import { LoadProtos } from '@/components/LoadProtos';
-import { catalogClient } from '@/lib/client';
-import { Transport } from '@/gen/catalog/v1/catalog_pb';
+import { catalogClient, clearSession } from '@/lib/client';
+import { Transport } from '@gen/catalog/v1/catalog_pb';
 import type { ServiceInfo, MethodInfo, MessageSchema } from '@/lib/types';
 
 function App() {
@@ -21,7 +21,17 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [initializing, setInitializing] = useState(true);
   const [targetEndpoint, setTargetEndpoint] = useState('localhost:50051');
+  const [useTls, setUseTls] = useState(false);
   const [transport, setTransport] = useState<Transport>(Transport.CONNECT);
+
+  // Auto-detect TLS based on port
+  const handleEndpointChange = (newEndpoint: string) => {
+    setTargetEndpoint(newEndpoint);
+    // Auto-enable TLS for port 443
+    if (newEndpoint.includes(':443')) {
+      setUseTls(true);
+    }
+  };
 
   useEffect(() => {
     loadServices();
@@ -77,7 +87,7 @@ function App() {
 
     // Auto-update target endpoint if service has a known endpoint
     if (service?.endpoint) {
-      setTargetEndpoint(service.endpoint);
+      handleEndpointChange(service.endpoint);
     }
 
     if (method) {
@@ -154,30 +164,62 @@ function App() {
     const startTime = performance.now();
 
     try {
-      const result = await catalogClient.invokeGRPC({
-        endpoint: targetEndpoint,
-        service: selectedService,
-        method: currentMethod.name,
-        requestJson: JSON.stringify(request),
-        useTls: false,
-        timeoutSeconds: 30,
-        transport: transport,
-      });
+      // For Connect protocol (HTTP), make direct browser request
+      // For gRPC, use backend proxy (browsers can't do HTTP/2 + binary protobuf)
+      if (transport === Transport.CONNECT) {
+        const protocol = useTls ? 'https' : 'http';
+        const url = `${protocol}://${targetEndpoint}/${selectedService}/${currentMethod.name}`;
 
-      const endTime = performance.now();
-      setResponseTime(Math.round(endTime - startTime));
+        const fetchResponse = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(request),
+        });
 
-      // Check if the invocation was successful
-      if ((result as any).success) {
-        if ((result as any).responseJson) {
-          setResponse(JSON.parse((result as any).responseJson));
+        const endTime = performance.now();
+        setResponseTime(Math.round(endTime - startTime));
+
+        if (fetchResponse.ok) {
+          const responseData = await fetchResponse.json();
+          setResponse(responseData);
         } else {
-          setResponse({}); // Empty successful response
+          // Try to parse error response
+          try {
+            const errorData = await fetchResponse.json();
+            setError(errorData.message || errorData.error || `HTTP ${fetchResponse.status}: ${fetchResponse.statusText}`);
+          } catch {
+            setError(`HTTP ${fetchResponse.status}: ${fetchResponse.statusText}`);
+          }
         }
       } else {
-        // Invocation failed - display error from the response
-        const errorMsg = (result as any).error || (result as any).statusMessage || 'Request failed';
-        setError(errorMsg);
+        // gRPC mode - use backend proxy
+        const result = await catalogClient.invokeGRPC({
+          endpoint: targetEndpoint,
+          service: selectedService,
+          method: currentMethod.name,
+          requestJson: JSON.stringify(request),
+          useTls: useTls,
+          timeoutSeconds: 30,
+          transport: transport,
+        });
+
+        const endTime = performance.now();
+        setResponseTime(Math.round(endTime - startTime));
+
+        // Check if the invocation was successful
+        if ((result as any).success) {
+          if ((result as any).responseJson) {
+            setResponse(JSON.parse((result as any).responseJson));
+          } else {
+            setResponse({}); // Empty successful response
+          }
+        } else {
+          // Invocation failed - display error from the response
+          const errorMsg = (result as any).error || (result as any).statusMessage || 'Request failed';
+          setError(errorMsg);
+        }
       }
     } catch (err) {
       console.error('Request failed:', err);
@@ -203,7 +245,19 @@ function App() {
       {/* Header */}
       <header className="h-14 border-b bg-card/50 backdrop-blur-sm flex items-center justify-between px-4 shrink-0">
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
+          <button
+            onClick={() => {
+              setSelectedService(null);
+              setSelectedMethod(null);
+              setCurrentMethod(null);
+              setServices([]);
+              setResponse(undefined);
+              setError(undefined);
+              clearSession(); // Clear session to start fresh
+            }}
+            className="flex items-center gap-2 hover:opacity-80 transition-opacity cursor-pointer"
+            title="Load new protos"
+          >
             <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
               <svg className="w-5 h-5 text-primary" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M12 2L2 7l10 5 10-5-10-5z" />
@@ -213,7 +267,7 @@ function App() {
             </div>
             <span className="font-semibold text-lg">ConnectRPC</span>
             <span className="text-muted-foreground font-normal">Inspect</span>
-          </div>
+          </button>
         </div>
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
@@ -221,10 +275,19 @@ function App() {
             <input
               type="text"
               value={targetEndpoint}
-              onChange={(e) => setTargetEndpoint(e.target.value)}
+              onChange={(e) => handleEndpointChange(e.target.value)}
               placeholder="localhost:50051"
               className="h-8 w-48 px-3 text-sm rounded-md border bg-background focus:outline-none focus:ring-2 focus:ring-primary/50"
             />
+            <label className="flex items-center gap-1.5 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={useTls}
+                onChange={(e) => setUseTls(e.target.checked)}
+                className="rounded border-border h-4 w-4"
+              />
+              <span className="text-sm text-muted-foreground">TLS</span>
+            </label>
           </div>
           <div className="flex items-center h-8 rounded-md border bg-muted/50 p-0.5">
             <button
