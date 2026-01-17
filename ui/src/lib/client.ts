@@ -1,6 +1,6 @@
 import { createPromiseClient, Interceptor } from '@connectrpc/connect';
 import { createConnectTransport } from '@connectrpc/connect-web';
-import { CatalogService } from '@/gen/catalog/v1/catalog_connect';
+import { CatalogService } from '@gen/catalog/v1/catalog_connect';
 
 // Session management
 let sessionId: string | null = null;
