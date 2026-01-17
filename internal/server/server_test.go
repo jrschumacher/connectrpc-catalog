@@ -19,16 +19,30 @@ func TestLoadProtos_WithTestData(t *testing.T) {
 	server := New()
 	defer server.Close()
 
+	ctx := context.Background()
+
 	// Create test file descriptor set
 	fds := createTestFileDescriptorSet()
 
-	// Register it directly (bypassing LoadProtos RPC)
-	if err := server.GetRegistry().Register(fds); err != nil {
+	// Create a session and register it directly (bypassing LoadProtos RPC)
+	state, sessionID, err := server.sessionManager.GetOrCreate("")
+	if err != nil {
+		t.Fatalf("Failed to create session: %v", err)
+	}
+
+	if err := state.Registry.Register(fds); err != nil {
 		t.Fatalf("Failed to register test descriptors: %v", err)
 	}
 
-	// Verify registration worked
-	services := server.GetRegistry().ListServices()
+	// Verify registration worked by listing services with session
+	req := connect.NewRequest(&catalogv1.ListServicesRequest{})
+	req.Header().Set("X-Session-ID", sessionID)
+	resp, err := server.ListServices(ctx, req)
+	if err != nil {
+		t.Fatalf("ListServices failed: %v", err)
+	}
+
+	services := resp.Msg.Services
 	if len(services) != 1 {
 		t.Errorf("Expected 1 service, got %d", len(services))
 	}
@@ -72,14 +86,20 @@ func TestListServices(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Register test descriptors directly
+	// Create a session and register test descriptors directly
+	state, sessionID, err := server.sessionManager.GetOrCreate("")
+	if err != nil {
+		t.Fatalf("Failed to create session: %v", err)
+	}
+
 	fds := createTestFileDescriptorSet()
-	if err := server.GetRegistry().Register(fds); err != nil {
+	if err := state.Registry.Register(fds); err != nil {
 		t.Fatalf("Failed to register test descriptors: %v", err)
 	}
 
-	// Now list services
+	// Now list services with session
 	listReq := connect.NewRequest(&catalogv1.ListServicesRequest{})
+	listReq.Header().Set("X-Session-ID", sessionID)
 
 	listResp, err := server.ListServices(ctx, listReq)
 	if err != nil {
@@ -155,16 +175,22 @@ func TestGetServiceSchema(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Register test descriptors directly
+	// Create a session and register test descriptors directly
+	state, sessionID, err := server.sessionManager.GetOrCreate("")
+	if err != nil {
+		t.Fatalf("Failed to create session: %v", err)
+	}
+
 	fds := createTestFileDescriptorSet()
-	if err := server.GetRegistry().Register(fds); err != nil {
+	if err := state.Registry.Register(fds); err != nil {
 		t.Fatalf("Failed to register test descriptors: %v", err)
 	}
 
-	// Get schema for TestService
+	// Get schema for TestService with session
 	schemaReq := connect.NewRequest(&catalogv1.GetServiceSchemaRequest{
 		ServiceName: "test.v1.TestService",
 	})
+	schemaReq.Header().Set("X-Session-ID", sessionID)
 
 	schemaResp, err := server.GetServiceSchema(ctx, schemaReq)
 	if err != nil {
@@ -208,16 +234,22 @@ func TestGetServiceSchema_NotFound(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Register test descriptors first
+	// Create a session and register test descriptors first
+	state, sessionID, err := server.sessionManager.GetOrCreate("")
+	if err != nil {
+		t.Fatalf("Failed to create session: %v", err)
+	}
+
 	fds := createTestFileDescriptorSet()
-	if err := server.GetRegistry().Register(fds); err != nil {
+	if err := state.Registry.Register(fds); err != nil {
 		t.Fatalf("Failed to register test descriptors: %v", err)
 	}
 
-	// Try to get schema for non-existent service
+	// Try to get schema for non-existent service with session
 	schemaReq := connect.NewRequest(&catalogv1.GetServiceSchemaRequest{
 		ServiceName: "nonexistent.Service",
 	})
+	schemaReq.Header().Set("X-Session-ID", sessionID)
 
 	schemaResp, err := server.GetServiceSchema(ctx, schemaReq)
 	if err != nil {
@@ -260,13 +292,18 @@ func TestInvokeGRPC(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Register test descriptors directly
+	// Create a session and register test descriptors directly
+	state, sessionID, err := server.sessionManager.GetOrCreate("")
+	if err != nil {
+		t.Fatalf("Failed to create session: %v", err)
+	}
+
 	fds := createTestFileDescriptorSet()
-	if err := server.GetRegistry().Register(fds); err != nil {
+	if err := state.Registry.Register(fds); err != nil {
 		t.Fatalf("Failed to register test descriptors: %v", err)
 	}
 
-	// Test invocation with valid request structure
+	// Test invocation with valid request structure and session
 	// Note: This will fail to connect since there's no actual server,
 	// but we can verify the request validation works
 	invokeReq := connect.NewRequest(&catalogv1.InvokeGRPCRequest{
@@ -276,6 +313,7 @@ func TestInvokeGRPC(t *testing.T) {
 		RequestJson: `{"name": "test"}`,
 		UseTls:      false,
 	})
+	invokeReq.Header().Set("X-Session-ID", sessionID)
 
 	invokeResp, err := server.InvokeGRPC(ctx, invokeReq)
 	if err != nil {
@@ -381,47 +419,53 @@ func TestServerStats(t *testing.T) {
 	stats := server.GetStats()
 
 	// Verify stats structure is populated
-	if stats.RegistryStats.ServiceCount < 0 {
-		t.Error("Expected non-negative services count")
-	}
-
-	if stats.ConnectionStats.ActiveConnections < 0 {
-		t.Error("Expected non-negative active connections")
+	if stats.SessionStats.ActiveSessions < 0 {
+		t.Error("Expected non-negative active sessions")
 	}
 }
 
-// TestClearRegistry tests clearing the registry
-func TestClearRegistry(t *testing.T) {
+// TestSessionIsolation tests that sessions are isolated from each other
+func TestSessionIsolation(t *testing.T) {
 	server := New()
 	defer server.Close()
 
 	ctx := context.Background()
 
-	// Register test descriptors directly
+	// Create first session and register test descriptors
+	state1, sessionID1, err := server.sessionManager.GetOrCreate("")
+	if err != nil {
+		t.Fatalf("Failed to create session: %v", err)
+	}
+
 	fds := createTestFileDescriptorSet()
-	if err := server.GetRegistry().Register(fds); err != nil {
+	if err := state1.Registry.Register(fds); err != nil {
 		t.Fatalf("Failed to register test descriptors: %v", err)
 	}
 
-	// Verify services are loaded
-	listReq := connect.NewRequest(&catalogv1.ListServicesRequest{})
-	listResp, err := server.ListServices(ctx, listReq)
+	// Verify services are loaded in session 1
+	listReq1 := connect.NewRequest(&catalogv1.ListServicesRequest{})
+	listReq1.Header().Set("X-Session-ID", sessionID1)
+	listResp1, err := server.ListServices(ctx, listReq1)
 	if err != nil {
 		t.Fatalf("ListServices failed: %v", err)
 	}
-	if len(listResp.Msg.Services) == 0 {
-		t.Fatal("Expected services to be loaded")
+	if len(listResp1.Msg.Services) == 0 {
+		t.Fatal("Expected services to be loaded in session 1")
 	}
 
-	// Clear registry
-	server.ClearRegistry()
-
-	// Verify services are cleared
-	listResp2, err := server.ListServices(ctx, listReq)
+	// Create second session (should have no services)
+	listReq2 := connect.NewRequest(&catalogv1.ListServicesRequest{})
+	listResp2, err := server.ListServices(ctx, listReq2)
 	if err != nil {
-		t.Fatalf("ListServices failed after clear: %v", err)
+		t.Fatalf("ListServices failed: %v", err)
 	}
+
+	sessionID2 := listResp2.Header().Get("X-Session-ID")
+	if sessionID2 == sessionID1 {
+		t.Fatal("Expected different session ID")
+	}
+
 	if len(listResp2.Msg.Services) != 0 {
-		t.Errorf("Expected zero services after clear, got %d", len(listResp2.Msg.Services))
+		t.Errorf("Expected zero services in new session, got %d", len(listResp2.Msg.Services))
 	}
 }

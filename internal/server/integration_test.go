@@ -143,8 +143,15 @@ func TestIntegrationListServices(t *testing.T) {
 		t.Fatalf("LoadProtos returned error: %s", loadResp.Msg.Error)
 	}
 
-	// Step 2: List services
+	// Get session ID from response
+	sessionID := loadResp.Header().Get("X-Session-ID")
+	if sessionID == "" {
+		t.Fatal("Expected X-Session-ID header in LoadProtos response")
+	}
+
+	// Step 2: List services using the same session
 	listReq := connect.NewRequest(&catalogv1.ListServicesRequest{})
+	listReq.Header().Set("X-Session-ID", sessionID)
 	listResp, err := client.ListServices(ctx, listReq)
 	if err != nil {
 		t.Fatalf("ListServices failed: %v", err)
@@ -217,8 +224,15 @@ func TestIntegrationGetServiceSchema(t *testing.T) {
 		t.Fatalf("LoadProtos returned error: %s", loadResp.Msg.Error)
 	}
 
-	// Step 2: Get first service name
+	// Get session ID from response
+	sessionID := loadResp.Header().Get("X-Session-ID")
+	if sessionID == "" {
+		t.Fatal("Expected X-Session-ID header in LoadProtos response")
+	}
+
+	// Step 2: Get first service name using the same session
 	listReq := connect.NewRequest(&catalogv1.ListServicesRequest{})
+	listReq.Header().Set("X-Session-ID", sessionID)
 	listResp, err := client.ListServices(ctx, listReq)
 	if err != nil {
 		t.Fatalf("ListServices failed: %v", err)
@@ -229,10 +243,11 @@ func TestIntegrationGetServiceSchema(t *testing.T) {
 
 	serviceName := listResp.Msg.Services[0].Name
 
-	// Step 3: Get service schema
+	// Step 3: Get service schema using the same session
 	schemaReq := connect.NewRequest(&catalogv1.GetServiceSchemaRequest{
 		ServiceName: serviceName,
 	})
+	schemaReq.Header().Set("X-Session-ID", sessionID)
 
 	schemaResp, err := client.GetServiceSchema(ctx, schemaReq)
 	if err != nil {

@@ -3,10 +3,9 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { catalogClient } from '@/lib/client';
-import { LoadProtosRequest } from '@/gen/catalog/v1/catalog_pb';
-import { Upload, Github, Package, Folder, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
+import { Upload, Github, Package, Folder, CheckCircle, AlertCircle, Loader2, Zap } from 'lucide-react';
 
-type SourceType = 'buf_module' | 'proto_path' | 'proto_repo';
+type SourceType = 'buf_module' | 'proto_path' | 'proto_repo' | 'reflection';
 
 interface LoadProtosProps {
   onLoadSuccess: (endpoint?: string) => void;
@@ -34,12 +33,20 @@ const sourceOptions = [
     placeholder: 'github.com/connectrpc/eliza',
     description: 'Load from GitHub repository',
   },
+  {
+    type: 'reflection' as SourceType,
+    label: 'Auto-Discover',
+    icon: Zap,
+    placeholder: 'demo.connectrpc.com:443',
+    description: 'Discover services via gRPC reflection',
+  },
 ];
 
 export function LoadProtos({ onLoadSuccess }: LoadProtosProps) {
   const [sourceType, setSourceType] = useState<SourceType>('buf_module');
   const [sourceValue, setSourceValue] = useState('');
   const [endpoint, setEndpoint] = useState('localhost:50051');
+  const [useTls, setUseTls] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const [success, setSuccess] = useState<string | undefined>();
@@ -55,16 +62,22 @@ export function LoadProtos({ onLoadSuccess }: LoadProtosProps) {
     setSuccess(undefined);
 
     try {
-      // Build request with proper oneof structure for proto-es
-      const sourceCase = sourceType === 'buf_module' ? 'bufModule' as const :
-                         sourceType === 'proto_path' ? 'protoPath' as const : 'protoRepo' as const;
+      // Build request with proper protobuf-es oneof format
+      const request: any = {};
 
-      const request = new LoadProtosRequest({
-        source: {
-          case: sourceCase,
-          value: sourceValue,
-        },
-      });
+      if (sourceType === 'buf_module') {
+        request.source = { case: 'bufModule', value: sourceValue };
+      } else if (sourceType === 'proto_path') {
+        request.source = { case: 'protoPath', value: sourceValue };
+      } else if (sourceType === 'proto_repo') {
+        request.source = { case: 'protoRepo', value: sourceValue };
+      } else if (sourceType === 'reflection') {
+        request.source = { case: 'reflectionEndpoint', value: sourceValue };
+        request.reflectionOptions = {
+          useTls: useTls,
+          timeoutSeconds: 15,
+        };
+      }
 
       const result = await catalogClient.loadProtos(request);
 
@@ -72,10 +85,17 @@ export function LoadProtos({ onLoadSuccess }: LoadProtosProps) {
         const serviceCount = (result as any).serviceCount || 0;
         const fileCount = (result as any).fileCount || 0;
         setSuccess(`Loaded ${serviceCount} service${serviceCount !== 1 ? 's' : ''} from ${fileCount} file${fileCount !== 1 ? 's' : ''}`);
+
+        // For reflection, use the reflection endpoint as the target
+        // For other sources, use the manually specified endpoint
+        const targetEndpoint = sourceType === 'reflection'
+          ? sourceValue.trim()
+          : endpoint.trim();
+
         setSourceValue('');
 
         setTimeout(() => {
-          onLoadSuccess(endpoint.trim() || undefined);
+          onLoadSuccess(targetEndpoint || undefined);
         }, 500);
       } else {
         setError((result as any).error || 'Failed to load protos');
@@ -106,7 +126,7 @@ export function LoadProtos({ onLoadSuccess }: LoadProtosProps) {
       {/* Source Type Selection */}
       <div className="space-y-2">
         <Label className="text-sm font-medium">Source</Label>
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 gap-2">
           {sourceOptions.map((option) => {
             const Icon = option.icon;
             const isSelected = sourceType === option.type;
@@ -147,23 +167,39 @@ export function LoadProtos({ onLoadSuccess }: LoadProtosProps) {
           className="font-mono text-sm"
         />
         <p className="text-xs text-muted-foreground">{currentSource.description}</p>
+
+        {/* TLS checkbox for reflection mode */}
+        {sourceType === 'reflection' && (
+          <div className="flex items-center gap-2 pt-1">
+            <input
+              type="checkbox"
+              id="use-tls"
+              checked={useTls}
+              onChange={(e) => setUseTls(e.target.checked)}
+              className="rounded border-border"
+            />
+            <Label htmlFor="use-tls" className="text-sm cursor-pointer">Use TLS (required for https endpoints)</Label>
+          </div>
+        )}
       </div>
 
-      {/* Target Endpoint */}
-      <div className="space-y-2">
-        <Label htmlFor="endpoint-input" className="text-sm font-medium">
-          Target Endpoint
-        </Label>
-        <Input
-          id="endpoint-input"
-          placeholder="localhost:50051"
-          value={endpoint}
-          onChange={(e) => setEndpoint(e.target.value)}
-          disabled={loading}
-          className="font-mono text-sm"
-        />
-        <p className="text-xs text-muted-foreground">Where this service runs (used when invoking methods)</p>
-      </div>
+      {/* Target Endpoint - only show for non-reflection sources */}
+      {sourceType !== 'reflection' && (
+        <div className="space-y-2">
+          <Label htmlFor="endpoint-input" className="text-sm font-medium">
+            Target Endpoint
+          </Label>
+          <Input
+            id="endpoint-input"
+            placeholder="localhost:50051"
+            value={endpoint}
+            onChange={(e) => setEndpoint(e.target.value)}
+            disabled={loading}
+            className="font-mono text-sm"
+          />
+          <p className="text-xs text-muted-foreground">Where this service runs (used when invoking methods)</p>
+        </div>
+      )}
 
       {/* Load Button */}
       <Button onClick={handleLoad} disabled={loading || !sourceValue.trim()} className="w-full">
@@ -200,6 +236,7 @@ export function LoadProtos({ onLoadSuccess }: LoadProtosProps) {
           {[
             { type: 'buf_module', value: 'buf.build/connectrpc/eliza' },
             { type: 'buf_module', value: 'buf.build/grpc/grpc' },
+            { type: 'reflection', value: 'demo.connectrpc.com:443' },
           ].map((example) => (
             <button
               key={example.value}

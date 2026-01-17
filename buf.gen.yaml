@@ -14,10 +14,10 @@ plugins:
     opt:
       - paths=source_relative
   - remote: buf.build/bufbuild/es:v1.10.0
-    out: gen
+    out: ui/src/gen
     opt:
       - target=ts
   - remote: buf.build/connectrpc/es:v1.6.1
-    out: gen
+    out: ui/src/gen
     opt:
       - target=ts
