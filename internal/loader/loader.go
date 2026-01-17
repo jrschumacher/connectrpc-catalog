@@ -196,15 +196,17 @@ func ValidateBufInstallation() error {
 type SourceType string
 
 const (
-	SourceTypePath      SourceType = "path"
-	SourceTypeGitHub    SourceType = "github"
-	SourceTypeBufModule SourceType = "buf_module"
+	SourceTypePath       SourceType = "path"
+	SourceTypeGitHub     SourceType = "github"
+	SourceTypeBufModule  SourceType = "buf_module"
+	SourceTypeReflection SourceType = "reflection"
 )
 
 // LoadSource represents a proto source configuration
 type LoadSource struct {
-	Type  SourceType
-	Value string
+	Type             SourceType
+	Value            string
+	ReflectionOptions *ReflectionOptions // Optional, only for reflection sources
 }
 
 // Load is a unified loader that dispatches to the appropriate loader function
@@ -216,6 +218,12 @@ func Load(source LoadSource) (*descriptorpb.FileDescriptorSet, error) {
 		return LoadFromGitHub(source.Value)
 	case SourceTypeBufModule:
 		return LoadFromBufModule(source.Value)
+	case SourceTypeReflection:
+		opts := ReflectionOptions{}
+		if source.ReflectionOptions != nil {
+			opts = *source.ReflectionOptions
+		}
+		return LoadFromReflection(source.Value, opts)
 	default:
 		return nil, fmt.Errorf("unknown source type: %s", source.Type)
 	}
