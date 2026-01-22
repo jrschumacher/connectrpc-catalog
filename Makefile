@@ -4,7 +4,7 @@
 all: build
 
 # Build both UI and Go binary
-build:
+build: gen
 	@echo "Building ConnectRPC Catalog..."
 	@./build.sh
 

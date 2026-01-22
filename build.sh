@@ -4,6 +4,11 @@ set -e
 
 echo "Building ConnectRPC Catalog..."
 
+# Step 0: Generate protobuf code
+echo ""
+echo "Step 0: Generating protobuf code..."
+make gen
+
 # Step 1: Build the UI
 echo ""
 echo "Step 1: Building UI..."
