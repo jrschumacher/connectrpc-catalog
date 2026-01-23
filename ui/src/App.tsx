@@ -1,25 +1,16 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { ServiceBrowser } from '@/components/ServiceBrowser';
 import { MethodDetails } from '@/components/MethodDetails';
 import { RequestEditor } from '@/components/RequestEditor';
 import { ResponseViewer } from '@/components/ResponseViewer';
 import { LoadProtos } from '@/components/LoadProtos';
-import { catalogClient, clearSession } from '@/lib/client';
+import { clearSession } from '@/lib/client';
 import { Transport } from '@gen/catalog/v1/catalog_pb';
-import type { ServiceInfo, MethodInfo, MessageSchema } from '@/lib/types';
+import { useServices } from '@/hooks/useServices';
+import { useMethodSchema } from '@/hooks/useMethodSchema';
+import { useMethodInvocation } from '@/hooks/useMethodInvocation';
 
 function App() {
-  const [services, setServices] = useState<ServiceInfo[]>([]);
-  const [selectedService, setSelectedService] = useState<string | null>(null);
-  const [selectedMethod, setSelectedMethod] = useState<string | null>(null);
-  const [currentMethod, setCurrentMethod] = useState<MethodInfo | null>(null);
-  const [inputSchema, setInputSchema] = useState<MessageSchema | undefined>();
-  const [outputSchema, setOutputSchema] = useState<MessageSchema | undefined>();
-  const [response, setResponse] = useState<Record<string, unknown> | undefined>();
-  const [responseTime, setResponseTime] = useState<number | undefined>();
-  const [error, setError] = useState<string | undefined>();
-  const [loading, setLoading] = useState(false);
-  const [initializing, setInitializing] = useState(true);
   const [targetEndpoint, setTargetEndpoint] = useState('localhost:50051');
   const [useTls, setUseTls] = useState(false);
   const [transport, setTransport] = useState<Transport>(Transport.CONNECT);
@@ -33,200 +24,44 @@ function App() {
     }
   };
 
-  useEffect(() => {
-    loadServices();
-  }, []);
+  // Custom hooks for state management
+  const { services, initializing, loadServices } = useServices();
 
-  const loadServices = async (newEndpoint?: string) => {
-    try {
-      setInitializing(true);
-      const result = await catalogClient.listServices({});
+  const {
+    selectedService,
+    selectedMethod,
+    currentMethod,
+    inputSchema,
+    outputSchema,
+    selectMethod,
+    clearSelection,
+  } = useMethodSchema(services);
 
-      // Get current service names to identify new ones
-      const existingServiceNames = new Set(services.map(s => s.fullName));
-
-      const servicesData: ServiceInfo[] = ((result as any).services || []).map((svc: any) => {
-        const isNewService = !existingServiceNames.has(svc.name);
-        // Find existing service to preserve its endpoint, or use new endpoint for new services
-        const existingService = services.find(s => s.fullName === svc.name);
-
-        return {
-          name: svc.name || '',
-          fullName: svc.name || '',
-          methods: (svc.methods || []).map((method: any) => ({
-            name: method.name || '',
-            fullName: `${svc.name}.${method.name}`,
-            inputType: method.inputType || '',
-            outputType: method.outputType || '',
-            clientStreaming: method.clientStreaming || false,
-            serverStreaming: method.serverStreaming || false,
-          })),
-          // Preserve existing endpoint or assign new endpoint to newly loaded services
-          endpoint: existingService?.endpoint || (isNewService ? newEndpoint : undefined),
-        };
-      });
-
-      setServices(servicesData);
-    } catch (err) {
-      console.error('Failed to load services:', err);
-      setError(err instanceof Error ? err.message : 'Failed to load services');
-    } finally {
-      setInitializing(false);
-    }
-  };
+  const { response, responseTime, error, loading, invokeMethod, clearResponse } =
+    useMethodInvocation({
+      selectedService,
+      currentMethod,
+      targetEndpoint,
+      useTls,
+      transport,
+    });
 
   const handleSelectMethod = async (serviceFullName: string, methodName: string) => {
-    setSelectedService(serviceFullName);
-    setSelectedMethod(`${serviceFullName}.${methodName}`);
-    setResponse(undefined);
-    setResponseTime(undefined);
-    setError(undefined);
-
-    const service = services.find((s) => s.fullName === serviceFullName);
-    const method = service?.methods.find((m) => m.name === methodName);
+    clearResponse();
+    await selectMethod(serviceFullName, methodName);
 
     // Auto-update target endpoint if service has a known endpoint
+    const service = services.find((s) => s.fullName === serviceFullName);
     if (service?.endpoint) {
       handleEndpointChange(service.endpoint);
     }
-
-    if (method) {
-      setCurrentMethod(method);
-
-      try {
-        const schemaResult = await catalogClient.getServiceSchema({
-          serviceName: serviceFullName,
-        });
-
-        // Get method info from service.methods
-        const methodInfo = (schemaResult as any).service?.methods
-          ?.find((m: any) => m.name === methodName);
-
-        // Get message schemas from messageSchemas map (they're JSON strings)
-        const messageSchemas = (schemaResult as any).messageSchemas || {};
-
-        if (methodInfo) {
-          // Parse input schema from JSON string
-          const inputSchemaJson = messageSchemas[methodInfo.inputType];
-          if (inputSchemaJson) {
-            try {
-              const parsedInput = JSON.parse(inputSchemaJson);
-              setInputSchema({
-                name: parsedInput.title || methodInfo.inputType.split('.').pop() || '',
-                fields: Object.entries(parsedInput.properties || {}).map(([name, prop]: [string, any]) => ({
-                  name,
-                  type: prop.type || 'string',
-                  repeated: prop.type === 'array',
-                  optional: !(parsedInput.required || []).includes(name),
-                  description: prop.description,
-                })),
-              });
-            } catch (e) {
-              console.error('Failed to parse input schema JSON:', e);
-            }
-          }
-
-          // Parse output schema from JSON string
-          const outputSchemaJson = messageSchemas[methodInfo.outputType];
-          if (outputSchemaJson) {
-            try {
-              const parsedOutput = JSON.parse(outputSchemaJson);
-              setOutputSchema({
-                name: parsedOutput.title || methodInfo.outputType.split('.').pop() || '',
-                fields: Object.entries(parsedOutput.properties || {}).map(([name, prop]: [string, any]) => ({
-                  name,
-                  type: prop.type || 'string',
-                  repeated: prop.type === 'array',
-                  optional: !(parsedOutput.required || []).includes(name),
-                  description: prop.description,
-                })),
-              });
-            } catch (e) {
-              console.error('Failed to parse output schema JSON:', e);
-            }
-          }
-        }
-      } catch (err) {
-        console.error('Failed to load schema:', err);
-        setError(err instanceof Error ? err.message : 'Failed to load schema');
-      }
-    }
   };
 
-  const handleSubmitRequest = async (request: Record<string, unknown>) => {
-    if (!selectedService || !currentMethod) return;
-
-    setLoading(true);
-    setError(undefined);
-    setResponse(undefined);
-    setResponseTime(undefined);
-
-    const startTime = performance.now();
-
-    try {
-      // For Connect protocol (HTTP), make direct browser request
-      // For gRPC, use backend proxy (browsers can't do HTTP/2 + binary protobuf)
-      if (transport === Transport.CONNECT) {
-        const protocol = useTls ? 'https' : 'http';
-        const url = `${protocol}://${targetEndpoint}/${selectedService}/${currentMethod.name}`;
-
-        const fetchResponse = await fetch(url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(request),
-        });
-
-        const endTime = performance.now();
-        setResponseTime(Math.round(endTime - startTime));
-
-        if (fetchResponse.ok) {
-          const responseData = await fetchResponse.json();
-          setResponse(responseData);
-        } else {
-          // Try to parse error response
-          try {
-            const errorData = await fetchResponse.json();
-            setError(errorData.message || errorData.error || `HTTP ${fetchResponse.status}: ${fetchResponse.statusText}`);
-          } catch {
-            setError(`HTTP ${fetchResponse.status}: ${fetchResponse.statusText}`);
-          }
-        }
-      } else {
-        // gRPC mode - use backend proxy
-        const result = await catalogClient.invokeGRPC({
-          endpoint: targetEndpoint,
-          service: selectedService,
-          method: currentMethod.name,
-          requestJson: JSON.stringify(request),
-          useTls: useTls,
-          timeoutSeconds: 30,
-          transport: transport,
-        });
-
-        const endTime = performance.now();
-        setResponseTime(Math.round(endTime - startTime));
-
-        // Check if the invocation was successful
-        if ((result as any).success) {
-          if ((result as any).responseJson) {
-            setResponse(JSON.parse((result as any).responseJson));
-          } else {
-            setResponse({}); // Empty successful response
-          }
-        } else {
-          // Invocation failed - display error from the response
-          const errorMsg = (result as any).error || (result as any).statusMessage || 'Request failed';
-          setError(errorMsg);
-        }
-      }
-    } catch (err) {
-      console.error('Request failed:', err);
-      setError(err instanceof Error ? err.message : 'Request failed');
-    } finally {
-      setLoading(false);
-    }
+  const handleReset = () => {
+    clearSelection();
+    clearResponse();
+    clearSession();
+    loadServices();
   };
 
   if (initializing) {
@@ -246,15 +81,7 @@ function App() {
       <header className="h-14 border-b bg-card/50 backdrop-blur-sm flex items-center justify-between px-4 shrink-0">
         <div className="flex items-center gap-3">
           <button
-            onClick={() => {
-              setSelectedService(null);
-              setSelectedMethod(null);
-              setCurrentMethod(null);
-              setServices([]);
-              setResponse(undefined);
-              setError(undefined);
-              clearSession(); // Clear session to start fresh
-            }}
+            onClick={handleReset}
             className="flex items-center gap-2 hover:opacity-80 transition-opacity cursor-pointer"
             title="Load new protos"
           >
@@ -372,7 +199,7 @@ function App() {
               <div className="flex-1 overflow-auto p-4 border-b">
                 <RequestEditor
                   schema={inputSchema}
-                  onSubmit={handleSubmitRequest}
+                  onSubmit={invokeMethod}
                   loading={loading}
                 />
               </div>

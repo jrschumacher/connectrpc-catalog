@@ -551,8 +551,8 @@ func TestExtractGRPCStatus(t *testing.T) {
 		{
 			name:        "gRPC status error",
 			err:         status.Error(codes.NotFound, "not found"),
-			wantCode:    2, // Currently returns UNKNOWN, not parsing status yet
-			wantMessage: "rpc error: code = NotFound desc = not found",
+			wantCode:    5, // NotFound code is 5
+			wantMessage: "not found",
 		},
 	}
 
