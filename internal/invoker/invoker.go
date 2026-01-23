@@ -12,7 +12,6 @@ import (
 
 	catalogv1 "github.com/opentdf/connectrpc-catalog/gen/catalog/v1"
 
-	"github.com/golang/protobuf/jsonpb"
 	"github.com/jhump/protoreflect/desc"
 	"github.com/jhump/protoreflect/dynamic"
 	"github.com/jhump/protoreflect/dynamic/grpcdynamic"
@@ -20,23 +19,54 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
+
+const (
+	// DefaultMaxConnections is the default maximum number of cached connections
+	DefaultMaxConnections = 100
+	// DefaultConnectionTTL is the default time-to-live for cached connections
+	DefaultConnectionTTL = 5 * time.Minute
+	// ConnectionIdleTimeout is the timeout for idle connections
+	ConnectionIdleTimeout = 2 * time.Minute
+)
+
+// connectionMetadata tracks metadata about a cached connection
+type connectionMetadata struct {
+	conn      *grpc.ClientConn
+	createdAt time.Time
+	lastUsed  time.Time
+}
 
 // Invoker handles dynamic gRPC invocations using descriptor-based reflection
 type Invoker struct {
-	// Connection pool for reusing gRPC connections
-	connections map[string]*grpc.ClientConn
+	// Connection pool for reusing gRPC connections with metadata
+	connections map[string]*connectionMetadata
 	// HTTP client for Connect protocol
 	httpClient *http.Client
+	// Maximum number of connections to cache
+	maxConnections int
+	// Connection time-to-live
+	connectionTTL time.Duration
 }
 
-// New creates a new Invoker instance
+// New creates a new Invoker instance with default connection pool settings
 func New() *Invoker {
 	return &Invoker{
-		connections: make(map[string]*grpc.ClientConn),
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		connections:    make(map[string]*connectionMetadata),
+		httpClient:     &http.Client{Timeout: 30 * time.Second},
+		maxConnections: DefaultMaxConnections,
+		connectionTTL:  DefaultConnectionTTL,
+	}
+}
+
+// NewWithLimits creates a new Invoker with custom connection pool limits
+func NewWithLimits(maxConnections int, ttl time.Duration) *Invoker {
+	return &Invoker{
+		connections:    make(map[string]*connectionMetadata),
+		httpClient:     &http.Client{Timeout: 30 * time.Second},
+		maxConnections: maxConnections,
+		connectionTTL:  ttl,
 	}
 }
 
@@ -208,8 +238,7 @@ func (inv *Invoker) invokeGRPC(ctx context.Context, req InvokeRequest) (*InvokeR
 	// Parse request JSON into dynamic message
 	reqMsg := dynamic.NewMessage(req.MethodDesc.GetInputType())
 
-	unmarshaler := &jsonpb.Unmarshaler{}
-	if err := reqMsg.UnmarshalJSONPB(unmarshaler, []byte(req.RequestJSON)); err != nil {
+	if err := reqMsg.UnmarshalJSON(req.RequestJSON); err != nil {
 		return &InvokeResponse{
 			Success: false,
 			Error:   fmt.Sprintf("invalid request JSON: %v", err),
@@ -260,8 +289,7 @@ func (inv *Invoker) invokeGRPC(ctx context.Context, req InvokeRequest) (*InvokeR
 		}, nil
 	}
 
-	marshaler := &jsonpb.Marshaler{}
-	respJSON, err := dynRespMsg.MarshalJSONPB(marshaler)
+	respJSON, err := dynRespMsg.MarshalJSON()
 	if err != nil {
 		return &InvokeResponse{
 			Success: false,
@@ -278,38 +306,48 @@ func (inv *Invoker) invokeGRPC(ctx context.Context, req InvokeRequest) (*InvokeR
 	}, nil
 }
 
-// getConnection retrieves or creates a gRPC connection
+// getConnection retrieves or creates a gRPC connection with pool management
 func (inv *Invoker) getConnection(endpoint string, useTLS bool, serverName string) (*grpc.ClientConn, error) {
-	// Check if connection already exists
 	connKey := fmt.Sprintf("%s:%v:%s", endpoint, useTLS, serverName)
-	if conn, exists := inv.connections[connKey]; exists {
-		// Verify connection is still valid
-		if conn.GetState().String() != "SHUTDOWN" {
-			return conn, nil
+	now := time.Now()
+
+	// Clean up stale connections before checking pool
+	inv.cleanupStaleConnections()
+
+	// Check if connection already exists and is valid
+	if connMeta, exists := inv.connections[connKey]; exists {
+		// Check if connection is still valid and not expired
+		if connMeta.conn.GetState().String() != "SHUTDOWN" &&
+			now.Sub(connMeta.createdAt) < inv.connectionTTL {
+			// Update last used time
+			connMeta.lastUsed = now
+			return connMeta.conn, nil
 		}
-		// Connection is dead, remove it
+		// Connection is dead or expired, remove it
+		_ = connMeta.conn.Close()
 		delete(inv.connections, connKey)
+	}
+
+	// Enforce maximum connection limit
+	if len(inv.connections) >= inv.maxConnections {
+		inv.evictOldestConnection()
 	}
 
 	// Create new connection
 	var opts []grpc.DialOption
 
 	if useTLS {
-		// Use TLS credentials
 		tlsConfig := &tls.Config{}
 		if serverName != "" {
-			// Override server name for TLS verification
 			tlsConfig.ServerName = serverName
 		}
 		creds := credentials.NewTLS(tlsConfig)
 		opts = append(opts, grpc.WithTransportCredentials(creds))
 	} else {
-		// Use insecure credentials
 		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	}
 
 	// Use blocking dial with short timeout for fast failure when server is unreachable
-	// This ensures behavior similar to HTTP connect failures
 	dialCtx, dialCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer dialCancel()
 
@@ -320,22 +358,60 @@ func (inv *Invoker) getConnection(endpoint string, useTLS bool, serverName strin
 		return nil, fmt.Errorf("failed to dial %s: %w", endpoint, err)
 	}
 
-	// Cache the connection
-	inv.connections[connKey] = conn
+	// Cache the connection with metadata
+	inv.connections[connKey] = &connectionMetadata{
+		conn:      conn,
+		createdAt: now,
+		lastUsed:  now,
+	}
 
 	return conn, nil
+}
+
+// cleanupStaleConnections removes expired or idle connections from the pool
+func (inv *Invoker) cleanupStaleConnections() {
+	now := time.Now()
+	for key, connMeta := range inv.connections {
+		// Check if connection has expired or been idle too long
+		if now.Sub(connMeta.createdAt) >= inv.connectionTTL ||
+			now.Sub(connMeta.lastUsed) >= ConnectionIdleTimeout ||
+			connMeta.conn.GetState().String() == "SHUTDOWN" {
+			_ = connMeta.conn.Close()
+			delete(inv.connections, key)
+		}
+	}
+}
+
+// evictOldestConnection removes the least recently used connection
+func (inv *Invoker) evictOldestConnection() {
+	var oldestKey string
+	var oldestTime time.Time
+
+	for key, connMeta := range inv.connections {
+		if oldestKey == "" || connMeta.lastUsed.Before(oldestTime) {
+			oldestKey = key
+			oldestTime = connMeta.lastUsed
+		}
+	}
+
+	if oldestKey != "" {
+		if connMeta, exists := inv.connections[oldestKey]; exists {
+			_ = connMeta.conn.Close()
+			delete(inv.connections, oldestKey)
+		}
+	}
 }
 
 // Close closes all open gRPC connections
 func (inv *Invoker) Close() error {
 	var errs []error
-	for key, conn := range inv.connections {
-		if err := conn.Close(); err != nil {
+	for key, connMeta := range inv.connections {
+		if err := connMeta.conn.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("failed to close connection %s: %w", key, err))
 		}
 	}
 
-	inv.connections = make(map[string]*grpc.ClientConn)
+	inv.connections = make(map[string]*connectionMetadata)
 
 	if len(errs) > 0 {
 		return fmt.Errorf("errors closing connections: %v", errs)
@@ -350,9 +426,12 @@ func extractGRPCStatus(err error) (int32, string) {
 		return 0, "OK"
 	}
 
-	// Try to extract gRPC status
-	// This is simplified - in production use google.golang.org/grpc/status
-	// For now, return generic error code
+	// Extract gRPC status using the proper status package
+	if st, ok := status.FromError(err); ok {
+		return int32(st.Code()), st.Message()
+	}
+
+	// Fallback to generic error if status extraction fails
 	return 2, err.Error() // 2 = UNKNOWN
 }
 
@@ -456,8 +535,8 @@ func (inv *Invoker) GetConnectionStats() ConnectionStats {
 		EndpointCounts:    make(map[string]int),
 	}
 
-	for key, conn := range inv.connections {
-		state := conn.GetState()
+	for key, connMeta := range inv.connections {
+		state := connMeta.conn.GetState()
 		if state.String() != "SHUTDOWN" && state.String() != "TRANSIENT_FAILURE" {
 			stats.ActiveConnections++
 		}
@@ -471,12 +550,12 @@ func (inv *Invoker) GetConnectionStats() ConnectionStats {
 func (inv *Invoker) CloseConnection(endpoint string, useTLS bool, serverName string) error {
 	connKey := fmt.Sprintf("%s:%v:%s", endpoint, useTLS, serverName)
 
-	conn, exists := inv.connections[connKey]
+	connMeta, exists := inv.connections[connKey]
 	if !exists {
 		return fmt.Errorf("connection not found: %s", connKey)
 	}
 
-	if err := conn.Close(); err != nil {
+	if err := connMeta.conn.Close(); err != nil {
 		return fmt.Errorf("failed to close connection: %w", err)
 	}
 

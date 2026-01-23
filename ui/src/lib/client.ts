@@ -31,8 +31,11 @@ const sessionInterceptor: Interceptor = (next) => async (req) => {
   return res;
 };
 
+// Get base URL from environment variable or default to localhost
+const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
+
 const transport = createConnectTransport({
-  baseUrl: 'http://localhost:8080',
+  baseUrl,
   interceptors: [sessionInterceptor],
 });
 
